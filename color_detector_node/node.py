@@ -48,7 +48,11 @@ class ColorDetectorConfig(RestNodeConfig):
     """
     video_device: str = Field(
         default="/dev/video2",
-        description="V4L2 device path for the OT-2 camera",
+        description="V4L2 device path for the primary OT-2 camera",
+    )
+    video_device_2: str = Field(
+        default="/dev/video4",
+        description="V4L2 device path for the secondary Logitech camera",
     )
     snapshot_dir: str = Field(
         default=DATA_DIR,
@@ -71,22 +75,51 @@ class ColorDetectorNode(RestNode):
         self.camera = ColorDetectorInterface(
             video_device=self.config.video_device,
             logger=self.logger,
+            slot_positions_file="slot_positions.json",
         )
         self.camera.start()
-        self.logger.log("Camera interface started.")
+        self.camera2 = ColorDetectorInterface(
+            video_device=self.config.video_device_2,
+            logger=self.logger,
+            slot_positions_file="logitech_slot_positions.json",
+        )
+        self.camera2.start()
+        self.logger.log("Both cameras started.")
 
     def shutdown_handler(self) -> None:
         self.logger.log("Shutting down Color Detector node.")
         if hasattr(self, "camera"):
             self.camera.stop()
+        if hasattr(self, "camera2"):
+            self.camera2.stop()
+
+    def _combine_colors(self, colors1: Dict, colors2: Dict) -> Dict:
+        """If both cameras agree on a color, use it. Otherwise mark Unclear."""
+        combined = {}
+        for slot in range(1, 12):
+            c1 = colors1.get(slot, "Unclear")
+            c2 = colors2.get(slot, "Unclear")
+            if c1 == c2:
+                combined[slot] = c1
+            elif c1 == "Unclear":
+                combined[slot] = c2
+            elif c2 == "Unclear":
+                combined[slot] = c1
+            else:
+                combined[slot] = "Unclear"
+        return combined
 
     def state_handler(self) -> Dict[str, Any]:
         """Called every ~2 s by MADSci to keep the node state current."""
         if not hasattr(self, "camera"):
             return {}
-        colors = self.camera.get_all_colors()
+        colors = self._combine_colors(
+            self.camera.get_all_colors(),
+            self.camera2.get_all_colors(),
+        )
         self.node_state = {
-            "camera_running":    self.camera.is_running,
+            "camera1_running":   self.camera.is_running,
+            "camera2_running":   self.camera2.is_running,
             "slots_mapped":      self.camera.get_slots_mapped(),
             "floor_baseline_set": self.camera.has_floor_baseline(),
             "trained_colors":    self.camera.get_trained_colors(),
@@ -100,38 +133,34 @@ class ColorDetectorNode(RestNode):
     def scan_all_slots(self, frames_per_slot: int = 20) -> TrayColorMap:
         """
         Wait for frames_per_slot frames of data then return the confirmed
-        color for every OT-2 deck slot (1-11).
+        color for every OT-2 deck slot (1-11). Both cameras must agree.
         """
-        colors = self.camera.scan_all_slots(frames_per_slot=frames_per_slot)
-        empty   = sum(1 for c in colors.values() if c == "Empty")
-        detected = sum(1 for c in colors.values() if c not in ("Empty", "Unclear"))
-        return TrayColorMap(
-            slots=colors,
-            empty_count=empty,
-            detected_count=detected,
+        colors = self._combine_colors(
+            self.camera.scan_all_slots(frames_per_slot=frames_per_slot),
+            self.camera2.scan_all_slots(frames_per_slot=frames_per_slot),
         )
+        empty    = sum(1 for c in colors.values() if c == "Empty")
+        detected = sum(1 for c in colors.values() if c not in ("Empty", "Unclear"))
+        return TrayColorMap(slots=colors, empty_count=empty, detected_count=detected)
 
     @action
     def get_slot_color(self, slot: int) -> SlotColor:
-        """Return the current confirmed color for a single slot."""
-        color = self.camera.get_slot_color(slot)
-        return SlotColor(
-            slot=slot,
-            color=color,
-            confirmed=color not in ("Unclear",),
-        )
+        """Return the combined confirmed color for a single slot."""
+        c1 = self.camera.get_slot_color(slot)
+        c2 = self.camera2.get_slot_color(slot)
+        combined = self._combine_colors({slot: c1}, {slot: c2})[slot]
+        return SlotColor(slot=slot, color=combined, confirmed=combined not in ("Unclear",))
 
     @action
     def get_all_colors(self) -> TrayColorMap:
-        """Return live confirmed colors for all 11 slots without waiting."""
-        colors  = self.camera.get_all_colors()
-        empty   = sum(1 for c in colors.values() if c == "Empty")
-        detected = sum(1 for c in colors.values() if c not in ("Empty", "Unclear"))
-        return TrayColorMap(
-            slots=colors,
-            empty_count=empty,
-            detected_count=detected,
+        """Return live combined colors for all 11 slots without waiting."""
+        colors   = self._combine_colors(
+            self.camera.get_all_colors(),
+            self.camera2.get_all_colors(),
         )
+        empty    = sum(1 for c in colors.values() if c == "Empty")
+        detected = sum(1 for c in colors.values() if c not in ("Empty", "Unclear"))
+        return TrayColorMap(slots=colors, empty_count=empty, detected_count=detected)
 
     @action
     def train_color(self, request: TrainColorRequest) -> dict:

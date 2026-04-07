@@ -126,9 +126,11 @@ class ColorDetectorInterface:
     All public methods acquire self._lock and are safe to call from any thread.
     """
 
-    def __init__(self, video_device: str = "/dev/video2", logger=None):
-        self.video_device = video_device
-        self.logger       = logger
+    def __init__(self, video_device: str = "/dev/video2", logger=None,
+                 slot_positions_file: str = "slot_positions.json"):
+        self.video_device       = video_device
+        self.logger             = logger
+        self._slot_positions_file = slot_positions_file
 
         self._lock     = threading.Lock()
         self._running  = False
@@ -155,7 +157,7 @@ class ColorDetectorInterface:
     # ── Persistence ──────────────────────────────────────────────────────────
 
     def _load_all(self):
-        raw_pos = _load("slot_positions.json", {})
+        raw_pos = _load(self._slot_positions_file, {})
         self._slot_positions = {int(k): tuple(v) for k, v in raw_pos.items()}
         self._floor_baseline = _load("floor_baseline.json", {})
         raw_tr = _load("trained_colors.json", {})
@@ -167,7 +169,7 @@ class ColorDetectorInterface:
             )
 
     def _save_slots(self):
-        _save("slot_positions.json",
+        _save(self._slot_positions_file,
               {str(k): list(v) for k, v in self._slot_positions.items()})
 
     def _save_trained(self):
