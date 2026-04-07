@@ -1,0 +1,19 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(source:*)",
+      "WebFetch(domain:github.com)",
+      "WebSearch",
+      "WebFetch(domain:raw.githubusercontent.com)",
+      "WebFetch(domain:api.github.com)",
+      "Bash(curl:*)",
+      "Bash(pip show:*)",
+      "Bash(pip3 show:*)",
+      "Bash(python3 -c \"import madsci; print\\(madsci.__file__\\)\")",
+      "Bash(cat /home/aaron/MADSci/example_lab/example_modules/nodes/*.yaml)",
+      "Bash(pip3 list:*)",
+      "Read(//dev/**)",
+      "Bash(v4l2-ctl --list-devices)"
+    ]
+  }
+}

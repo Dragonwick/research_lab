@@ -1,0 +1,22 @@
+services:
+  color_detector:
+    build:
+      context: ..
+      dockerfile: color_detector_node/Dockerfile
+    container_name: ot2_color_detector
+    environment:
+      - NODE_NODE_NAME=ot2_color_detector
+      - NODE_URL=http://0.0.0.0:2001/
+      - NODE_VIDEO_DEVICE=/dev/video2
+      - NODE_SNAPSHOT_DIR=/data
+    ports:
+      - "2001:2001"
+    volumes:
+      - ../slot_positions.json:/data/slot_positions.json
+      - ../floor_baseline.json:/data/floor_baseline.json
+      - ../trained_colors.json:/data/trained_colors.json
+      - ../snapshots:/data/snapshots
+    devices:
+      - /dev/video2:/dev/video2
+    restart: unless-stopped
+    network_mode: host
