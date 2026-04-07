@@ -1,1 +1,10 @@
 color-env/
+.claude/
+__pycache__/
+*.pyc
+Log/
+logitech_test.jpg
+logitech_bright.jpg
+logitech_view.jpg
+logitech_warmed.jpg
+map_logitech_slots.py
