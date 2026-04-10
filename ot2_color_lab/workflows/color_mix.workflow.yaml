@@ -1,0 +1,17 @@
+name: color_mix
+description: >
+  Scan the OT-2 deck to find colored liquids, then mix red + blue
+  into an empty slot to produce purple.
+version: "1.0.0"
+
+steps:
+  - name: scan_deck
+    node: color_detector
+    action: scan_environment
+    description: Capture current deck state from camera
+
+  - name: run_mix
+    node: ot2_robot
+    action: run_mix
+    description: Transfer red + blue liquids into destination well
+    # args are filled in dynamically by mix.py based on scan results

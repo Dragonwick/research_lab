@@ -1,10 +1,10 @@
 name: ot2_color_detector
 description: >
-  Detects the color of labware cubes placed in OT-2 deck slots (1-11)
-  using an overhead camera and trained HSV color signatures.
+  Detects the color of labware cubes in OT-2 deck slots (1-11) using
+  two overhead cameras and trained HSV color signatures.
 module_name: color_detector_node.node
 class_name: ColorDetectorNode
-version: "1.0.0"
+version: "2.0.0"
 tags:
   - camera
   - color-detection
@@ -12,24 +12,11 @@ tags:
   - vision
 
 actions:
-  scan_all_slots:
-    description: Scan all 11 deck slots and return confirmed colors.
-    args:
-      frames_per_slot:
-        type: int
-        default: 20
-        description: Frames of data to accumulate before returning results.
-
-  get_slot_color:
-    description: Get the confirmed color for a single slot.
-    args:
-      slot:
-        type: int
-        required: true
-        description: Slot number 1-11.
-
-  get_all_colors:
-    description: Return live confirmed colors for all 11 slots immediately.
+  scan_environment:
+    description: >
+      Zoom into each of the 11 deck slots and return the detected color
+      for every slot. Both cameras are used; results are merged.
+      This is the main action for reading the deck state.
 
   train_color:
     description: >
@@ -42,15 +29,8 @@ actions:
 
   record_floor_baseline:
     description: >
-      Sample all slot positions with an empty deck.
-      Must be called before reliable color detection is possible.
-
-  set_slot_position:
-    description: Update the camera pixel coordinates for one slot.
-    args:
-      request:
-        type: SetSlotPositionRequest
-        required: true
+      Sample all slot positions with an empty deck and save as the
+      floor baseline. Call once before scanning for best accuracy.
 
   capture_snapshot:
     description: Save the current camera frame to disk.
@@ -58,3 +38,10 @@ actions:
       filename:
         type: str
         default: snapshot.jpg
+
+  set_slot_position:
+    description: Update the camera pixel coordinates for one slot.
+    args:
+      request:
+        type: SetSlotPositionRequest
+        required: true

@@ -1,19 +1,15 @@
 """
 OT-2 Color Detector — MADSci RestNode
 --------------------------------------
-Exposes the color detector as a REST service that can be orchestrated
-by a MADSci Workcell Manager alongside the OT-2 robot node.
+Exposes the color detector as a REST service.
 
-Endpoints (via @action):
-  POST /action/scan_all_slots       → TrayColorMap
-  POST /action/get_slot_color       → SlotColor
-  POST /action/get_all_colors       → TrayColorMap
-  POST /action/train_color          → {"status": "ok", "color": ...}
+Actions:
+  POST /action/scan_environment      → EnvironmentScan  (main action)
+  POST /action/train_color           → {"status": "ok", "color": ...}
   POST /action/record_floor_baseline → {"status": "ok", "slots": ...}
-  POST /action/set_slot_position    → {"status": "ok"}
-  POST /action/capture_snapshot     → {"status": "ok", "path": ...}
+  POST /action/capture_snapshot      → {"status": "ok", "path": ...}
 
-GET  /state   → NodeStatus (auto-updated every 2 s)
+GET  /state  → live node status (auto-updated every 2 s)
 """
 
 from typing import Any, Dict
@@ -25,11 +21,9 @@ from madsci.common.types.node_types import RestNodeConfig
 
 from .interface import ColorDetectorInterface
 from .types import (
-    SlotColor,
-    TrayColorMap,
+    EnvironmentScan,
     TrainColorRequest,
     SetSlotPositionRequest,
-    NodeStatus,
 )
 
 import os
@@ -41,18 +35,14 @@ DATA_DIR = os.path.dirname(HERE)
 # ── Config ─────────────────────────────────────────────────────────────────────
 
 class ColorDetectorConfig(RestNodeConfig):
-    """Configuration for the Color Detector node.
-
-    All fields can be overridden via environment variables with the
-    NODE_ prefix (e.g. NODE_VIDEO_DEVICE=/dev/video0).
-    """
+    """Configuration for the Color Detector node."""
     video_device: str = Field(
-        default="/dev/video2",
+        default="/dev/video0",
         description="V4L2 device path for the primary OT-2 camera",
     )
     video_device_2: str = Field(
-        default="/dev/video4",
-        description="V4L2 device path for the secondary Logitech camera",
+        default="/dev/video0",
+        description="V4L2 device path for the secondary camera",
     )
     snapshot_dir: str = Field(
         default=DATA_DIR,
@@ -65,8 +55,8 @@ class ColorDetectorConfig(RestNodeConfig):
 class ColorDetectorNode(RestNode):
     """MADSci node that detects colors of labware cubes in OT-2 deck slots."""
 
-    config: ColorDetectorConfig = ColorDetectorConfig()
-    config_model = ColorDetectorConfig
+    config:       ColorDetectorConfig = ColorDetectorConfig()
+    config_model  = ColorDetectorConfig
 
     # ── Lifecycle ─────────────────────────────────────────────────────────────
 
@@ -78,95 +68,95 @@ class ColorDetectorNode(RestNode):
             slot_positions_file="slot_positions.json",
         )
         self.camera.start()
-        self.camera2 = ColorDetectorInterface(
-            video_device=self.config.video_device_2,
-            logger=self.logger,
-            slot_positions_file="logitech_slot_positions.json",
-        )
-        self.camera2.start()
-        self.logger.log("Both cameras started.")
+        if self.config.video_device_2 != self.config.video_device:
+            self.camera2 = ColorDetectorInterface(
+                video_device=self.config.video_device_2,
+                logger=self.logger,
+                slot_positions_file="logitech_slot_positions.json",
+            )
+            self.camera2.start()
+            self.logger.log("Both cameras started.")
+        else:
+            self.camera2 = None
+            self.logger.log("Single camera mode (camera2 skipped — same device).")
 
     def shutdown_handler(self) -> None:
         self.logger.log("Shutting down Color Detector node.")
         if hasattr(self, "camera"):
             self.camera.stop()
-        if hasattr(self, "camera2"):
+        if hasattr(self, "camera2") and self.camera2:
             self.camera2.stop()
 
-    def _combine_colors(self, colors1: Dict, colors2: Dict) -> Dict:
-        """If both cameras agree on a color, use it. Otherwise mark Unclear."""
-        combined = {}
+    def _merge(self, colors1: Dict, colors2: Dict) -> Dict:
+        """
+        Merge results from two cameras.
+        Agreement → use that color.
+        One says Unclear/Unmapped → use the other.
+        Disagreement → mark Unclear.
+        """
+        merged = {}
         for slot in range(1, 12):
             c1 = colors1.get(slot, "Unclear")
             c2 = colors2.get(slot, "Unclear")
+            uncertain = {"Unclear", "Unmapped"}
             if c1 == c2:
-                combined[slot] = c1
-            elif c1 == "Unclear":
-                combined[slot] = c2
-            elif c2 == "Unclear":
-                combined[slot] = c1
+                merged[slot] = c1
+            elif c1 in uncertain:
+                merged[slot] = c2
+            elif c2 in uncertain:
+                merged[slot] = c1
             else:
-                combined[slot] = "Unclear"
-        return combined
+                merged[slot] = "Unclear"
+        return merged
 
     def state_handler(self) -> Dict[str, Any]:
         """Called every ~2 s by MADSci to keep the node state current."""
         if not hasattr(self, "camera"):
             return {}
-        colors = self._combine_colors(
-            self.camera.get_all_colors(),
-            self.camera2.get_all_colors(),
-        )
+        c2_colors = self.camera2.get_all_colors() if self.camera2 else {}
+        colors = self._merge(self.camera.get_all_colors(), c2_colors)
         self.node_state = {
-            "camera1_running":   self.camera.is_running,
-            "camera2_running":   self.camera2.is_running,
-            "slots_mapped":      self.camera.get_slots_mapped(),
+            "camera1_running":    self.camera.is_running,
+            "camera2_running":    self.camera2.is_running if self.camera2 else False,
+            "slots_mapped":       self.camera.get_slots_mapped(),
             "floor_baseline_set": self.camera.has_floor_baseline(),
-            "trained_colors":    self.camera.get_trained_colors(),
-            "current_colors":    {str(k): v for k, v in colors.items()},
+            "trained_colors":     self.camera.get_trained_colors(),
+            "current_colors":     {str(k): v for k, v in colors.items()},
         }
         return self.node_state
 
     # ── Actions ───────────────────────────────────────────────────────────────
 
     @action
-    def scan_all_slots(self, frames_per_slot: int = 20) -> TrayColorMap:
+    def scan_environment(self) -> EnvironmentScan:
         """
-        Wait for frames_per_slot frames of data then return the confirmed
-        color for every OT-2 deck slot (1-11). Both cameras must agree.
+        Zoom into each of the 11 deck slots on both cameras and return the
+        detected color for every slot.
+
+        Each slot is cropped at a larger radius than the live tracker uses,
+        then upscaled before running HSV color detection — giving sharper,
+        more reliable reads than the continuous background scan.
+
+        Both cameras are consulted; if they agree the result is used directly.
+        If they disagree, the slot is marked 'Unclear'.
         """
-        colors = self._combine_colors(
-            self.camera.scan_all_slots(frames_per_slot=frames_per_slot),
-            self.camera2.scan_all_slots(frames_per_slot=frames_per_slot),
-        )
+        c2_colors = self.camera2.scan_environment_zoomed() if self.camera2 else {}
+        colors = self._merge(self.camera.scan_environment_zoomed(), c2_colors)
         empty    = sum(1 for c in colors.values() if c == "Empty")
-        detected = sum(1 for c in colors.values() if c not in ("Empty", "Unclear"))
-        return TrayColorMap(slots=colors, empty_count=empty, detected_count=detected)
-
-    @action
-    def get_slot_color(self, slot: int) -> SlotColor:
-        """Return the combined confirmed color for a single slot."""
-        c1 = self.camera.get_slot_color(slot)
-        c2 = self.camera2.get_slot_color(slot)
-        combined = self._combine_colors({slot: c1}, {slot: c2})[slot]
-        return SlotColor(slot=slot, color=combined, confirmed=combined not in ("Unclear",))
-
-    @action
-    def get_all_colors(self) -> TrayColorMap:
-        """Return live combined colors for all 11 slots without waiting."""
-        colors   = self._combine_colors(
-            self.camera.get_all_colors(),
-            self.camera2.get_all_colors(),
+        detected = sum(1 for c in colors.values() if c not in ("Empty", "Unclear", "Unmapped"))
+        unclear  = sum(1 for c in colors.values() if c in ("Unclear", "Unmapped"))
+        return EnvironmentScan(
+            slots=colors,
+            empty_count=empty,
+            detected_count=detected,
+            unclear_count=unclear,
         )
-        empty    = sum(1 for c in colors.values() if c == "Empty")
-        detected = sum(1 for c in colors.values() if c not in ("Empty", "Unclear"))
-        return TrayColorMap(slots=colors, empty_count=empty, detected_count=detected)
 
     @action
     def train_color(self, request: TrainColorRequest) -> dict:
         """
-        Train a color signature. Place the target cube in Slot 1 FIRST,
-        then call this action. Blocks until training completes (~2 s).
+        Train a color signature. Place the cube in Slot 1 FIRST, then call
+        this action. Blocks until sampling completes (~2 s).
         """
         valid = ["Blue", "Red", "Orange", "Yellow", "Purple", "Green"]
         if request.color_name not in valid:
@@ -175,7 +165,7 @@ class ColorDetectorNode(RestNode):
             )
         self.logger.log(f"Training {request.color_name} — sampling Slot 1...")
         done_event = self.camera.start_training(request.color_name)
-        done_event.wait(timeout=15)   # wait up to 15 s
+        done_event.wait(timeout=15)
         if not done_event.is_set():
             raise RuntimeError(
                 "Training timed out. Make sure a cube is visible in Slot 1."
@@ -189,8 +179,8 @@ class ColorDetectorNode(RestNode):
     @action
     def record_floor_baseline(self) -> dict:
         """
-        Sample all slot positions with an EMPTY deck and save as the
-        floor baseline. Call this before scanning for best accuracy.
+        Sample all slot positions with an EMPTY deck and save as the floor
+        baseline. Call this once before scanning for best accuracy.
         """
         self.logger.log("Recording floor baseline — deck must be empty.")
         baseline = self.camera.record_floor_baseline()
@@ -201,6 +191,15 @@ class ColorDetectorNode(RestNode):
         }
 
     @action
+    def capture_snapshot(self, filename: str = "snapshot.jpg") -> dict:
+        """Save the current camera frame to the snapshot directory."""
+        path = os.path.join(self.config.snapshot_dir, filename)
+        ok   = self.camera.capture_snapshot(path)
+        if not ok:
+            raise RuntimeError("No camera frame available — is the camera running?")
+        return {"status": "ok", "path": path}
+
+    @action
     def set_slot_position(self, request: SetSlotPositionRequest) -> dict:
         """Update the pixel coordinates for one slot on the camera frame."""
         self.camera.set_slot_position(request.slot, request.x, request.y)
@@ -209,16 +208,6 @@ class ColorDetectorNode(RestNode):
             "slot": request.slot,
             "position": {"x": request.x, "y": request.y},
         }
-
-    @action
-    def capture_snapshot(self, filename: str = "snapshot.jpg") -> dict:
-        """Save the current camera frame to the snapshot directory."""
-        import os
-        path = os.path.join(self.config.snapshot_dir, filename)
-        ok   = self.camera.capture_snapshot(path)
-        if not ok:
-            raise RuntimeError("No camera frame available — is the camera running?")
-        return {"status": "ok", "path": path}
 
 
 # ── Entry point ───────────────────────────────────────────────────────────────

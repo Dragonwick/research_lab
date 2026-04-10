@@ -1,0 +1,36 @@
+name: ot2_robot
+description: >
+  MADSci node for the Opentrons OT-2 liquid handling robot.
+  Wraps the OT-2 HTTP API (port 31950) to upload and run pipette protocols.
+module_name: ot2_node.node
+class_name: OT2Node
+version: "1.0.0"
+tags:
+  - ot2
+  - liquid-handling
+  - robot
+
+actions:
+  run_mix:
+    description: >
+      Build and run a two-color mixing protocol on the OT-2.
+      Transfers volume µL from red_slot and blue_slot into dest_slot.
+    args:
+      red_slot:
+        type: int
+        required: true
+      blue_slot:
+        type: int
+        required: true
+      dest_slot:
+        type: int
+        required: true
+      volume:
+        type: int
+        default: 100
+
+  get_robot_status:
+    description: Return the current OT-2 status (idle, running, error, etc.)
+
+  stop_run:
+    description: Stop any currently running protocol on the OT-2.
